@@ -1,9 +1,17 @@
 require('dotenv').config()
 const yargs = require('yargs/yargs');
-const { hideBin } = require('yargs/helpers')
-const argv = yargs(hideBin(process.argv)).argv
+const { hideBin } = require('yargs/helpers');
+const argv = yargs(hideBin(process.argv)).argv;
+
 import { RestClient, WebsocketClient } from 'ftx-api';
-const {Keypair} = require("@solana/web3.js")
+const fetch = require('node-fetch');
+const dotenv = require('dotenv');
+const WebSocket = require('ws');
+const { Keypair, Connection, PublicKey, Account } = require('@solana/web3.js');
+const { Market } = require('@project-serum/serum');
+const bs58 = require('bs58');
+const path = require('path');
+const fs = require('fs');
 
 const ftxWithdrawal = async (amount, coin) => {
     const client = new RestClient(process.env.FTX_KEY, process.env.FTX_SECRET);
@@ -28,6 +36,14 @@ const ftxWithdrawal = async (amount, coin) => {
 // tokens
 // https://github.com/solana-labs/solana-program-library/blob/master/token/js/examples/create_mint_and_transfer_tokens.js
 const serumWithdrawal = async (amount, coin) => {
+    if (!await settledTokens(process.env.SERUM_MARKET_ADDRESS, process.env.SERUM_PROGRAM_ID)) {
+        return;
+    }
+
+    serumTransaction(0.001, 'USDT');
+}
+
+const serumTransaction = async (amount, coin) => {
     const accountFrom = Keypair.fromSecretKey(process.env.SOLANA_SECRET_KEY);
 
     // todo...
@@ -65,6 +81,45 @@ const serumWithdrawal = async (amount, coin) => {
         [from],
     );
     console.log('SIGNATURE', signature);
+}
+
+// https://github.com/project-serum/serum-ts/tree/master/packages/serum
+const settledTokens = async (marketAddr, programId) => {
+    let connection = new Connection(process.env.SOLANA_RPC_URL);
+    let privateKey = process.env.SOLANA_SECRET_KEY; // .toString();
+    privateKey = bs58.decode(privateKey)
+    const owner = new Account(privateKey)
+    let marketAddress = new PublicKey(marketAddr)
+    let programAddress = new PublicKey(programId)
+    let market = await Market.load(connection, marketAddress, {}, programAddress)
+
+    let openOrders = await market.findOpenOrdersAccountsForOwner(connection, owner.publicKey)
+    /*
+    кошелек для отправки SOL - надо указывать owner.publicKey
+    кошелек для оправки USDT - B9x9ZwHCruH6xZNEfuwgXohcVpCsz8E24ixCVQAUU5MJ
+    */
+    for (let i in openOrders) {
+        let openOrder = openOrders[i]
+
+        if (openOrder.baseTokenFree > 0 || openOrder.quoteTokenFree > 0) {
+
+            let baseTokenAccount = new PublicKey(owner.publicKey)
+            let quoteTokenAccount = new PublicKey('B9x9ZwHCruH6xZNEfuwgXohcVpCsz8E24ixCVQAUU5MJ')
+
+            try {
+                await market.settleFunds(
+                    connection,
+                    owner,
+                    openOrder,
+                    baseTokenAccount,
+                    quoteTokenAccount,
+                ).then(a => console.log(a))
+                return true
+            } catch (e) {
+                return false
+            }
+        }
+    }
 }
 
 console.log(argv);
